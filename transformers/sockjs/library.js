@@ -1187,7 +1187,7 @@ SockJS.prototype.send = function(data) {
     if (that.readyState === SockJS.CONNECTING)
         throw new Error('INVALID_STATE_ERR');
     if (that.readyState === SockJS.OPEN) {
-        that._transport.doSend(utils.quote('' + data));
+        that._transport.doSend(utils.quote(data));
     }
     return true;
 };
