@@ -43,6 +43,12 @@ describe('Primus', function () {
     expect(primus.Spark).to.be.a('function');
   });
 
+  it('expooses static methods on wrapped Spark constructor', function () {
+    for (var key in Primus.Spark) {
+      expect(primus.Spark[key]).to.be.eql(Primus.Spark[key]);
+    }
+  });
+
   it('pre-binds the primus server in to the spark', function () {
     var spark = new primus.Spark();
     expect(spark.primus).to.equal(primus);
@@ -110,6 +116,20 @@ describe('Primus', function () {
     });
   });
 
+  it('serves the primus client on /primus/primus.js', function (done) {
+    common.request({
+      uri: 'http://localhost:'+ server.portnumber +'/primus/primus.js',
+      method: 'GET'
+    }, function (err, res, body) {
+      if (err) return done(err);
+
+      expect(res.statusCode).to.equal(200);
+      expect(body).to.include('Primus.prototype');
+
+      done();
+    });
+  });
+
   it('accepts a third-party transformer', function () {
     var Optimus = Primus.Transformer.extend({
       server: function () {},
@@ -151,8 +171,10 @@ describe('Primus', function () {
       new Primus(server, { transformer: 'cowsack' });
     } catch (e) {
       expect(e).to.be.instanceOf(Error);
-      expect(e.message).to.include('cowsack');
+      return expect(e.message).to.include('cowsack');
     }
+
+    throw new Error('Should have thrown');
   });
 
   it('throws a human readable error for an unsupported parser', function () {
@@ -161,6 +183,18 @@ describe('Primus', function () {
     } catch (e) {
       expect(e).to.be.instanceOf(Error);
       return expect(e.message).to.include('cowsack');
+    }
+
+    throw new Error('Should have thrown');
+  });
+
+  it('throws an error if initialised with an invalid server instance', function () {
+    var app = function () {};
+    try {
+      new Primus(app);
+    } catch (e) {
+      expect(e).to.be.instanceOf(Error);
+      return expect(e.message).to.include('server instance');
     }
 
     throw new Error('Should have thrown');
@@ -374,6 +408,62 @@ describe('Primus', function () {
       expect(library).to.be.a('string');
       expect(library).to.include('i am a client plugin');
     });
+
+    it('updates the default timeout', function (done) {
+      var primus = new Primus(server, { timeout: 60000 })
+        , Socket = primus.Socket;
+
+      var socket = new Socket('http://localhost:'+ server.portnumber);
+
+      expect(socket.options.ping).to.equal(50000);
+      socket.on('open', socket.end).on('end', done);
+    });
+
+    it('still allows overriding the default timeout', function (done) {
+      var primus = new Primus(server, { timeout: 60000 })
+        , Socket = primus.Socket;
+
+      var socket = new Socket('http://localhost:'+ server.portnumber, {
+        ping: 100
+      });
+
+      expect(socket.options.ping).to.equal(100);
+      socket.on('open', socket.end).on('end', done);
+    });
+
+    it('allows the use of options when using the default connection URL', function () {
+      var Socket = primus.Socket;
+
+      var socket = new Socket({
+        ping: 100,
+        strategy: false,
+        manual: true
+      });
+
+      expect(socket.url).to.eql(socket.parse('http://127.0.0.1'));
+      expect(socket.options.ping).to.equal(100);
+      expect(socket.options.strategy).to.have.length(0);
+    });
+
+    it('allows option.(url|uri) as url', function () {
+      var socket = new primus.Socket({
+        url: 'http://google.com',
+        ping: 100,
+        strategy: false,
+        manual: true
+      });
+
+      expect(socket.url).to.eql(socket.parse('http://google.com'));
+
+      socket = new primus.Socket({
+        uri: 'http://google.com',
+        ping: 100,
+        strategy: false,
+        manual: true
+      });
+
+      expect(socket.url).to.eql(socket.parse('http://google.com'));
+    });
   });
 
   describe('#save', function () {
@@ -390,6 +480,26 @@ describe('Primus', function () {
         expect(fs.readFileSync(async, 'utf-8')).to.equal(primus.library());
         done();
       });
+    });
+  });
+
+  describe('#reserved', function () {
+    it('sees all incoming:: and outgoing:: as reserved', function () {
+      expect(primus.reserved('incoming::error')).to.equal(true);
+      expect(primus.reserved('outgoing::error')).to.equal(true);
+      expect(primus.reserved('incoming::')).to.equal(true);
+      expect(primus.reserved('outgoing::')).to.equal(true);
+      expect(primus.reserved('somwhatincoming::error')).to.equal(false);
+      expect(primus.reserved('somwhatoutgoing::error')).to.equal(false);
+      expect(primus.reserved('INCOMING::ERROR')).to.equal(false);
+      expect(primus.reserved('OUTGOING::ERROR')).to.equal(false);
+      expect(primus.reserved('INCOMING::')).to.equal(false);
+      expect(primus.reserved('OUTGOING::')).to.equal(false);
+    });
+
+    it('sees specific events as reserved', function () {
+      expect(primus.reserved('log')).to.equal(true);
+      expect(primus.reserved('ERROR')).to.equal(false);
     });
   });
 });

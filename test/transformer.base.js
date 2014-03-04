@@ -166,6 +166,27 @@ module.exports = function base(transformer) {
         });
       });
 
+      it('emits a readyStateChange event', function (done) {
+        var socket = new Socket('http://localhost:'+ server.portnumber)
+          , state = socket.readyState
+          , calls = 0;
+
+        socket.on('readyStateChange', function () {
+          expect(state).to.not.equal(socket.readyState);
+          state = socket.readyState;
+
+          calls++;
+        });
+
+        socket.on('open', function () {
+          expect(!!socket.socket).to.equal(true);
+          socket.end();
+        }).on('end', function () {
+          expect(calls).to.equal(3);
+          done();
+        });
+      });
+
       it('emits an `end` event when its closed', function (done) {
         var socket = new Socket('http://localhost:'+ server.portnumber);
 
@@ -888,6 +909,18 @@ module.exports = function base(transformer) {
         );
       });
 
+      it('should handle requests to non existing routes captured by primus', function(done) {
+        this.timeout(100);
+        request(
+          'http://localhost:'+ server.portnumber + '/primus.js',
+          function (err, res, body) {
+            if (err) return done(err);
+
+            done();
+          }
+        );
+      });
+
       it('correctly parses the ip address', function (done) {
         primus.on('connection', function (spark) {
           var address = spark.address;
@@ -1058,6 +1091,20 @@ module.exports = function base(transformer) {
             var socket = new Socket('http://localhost:'+ server.portnumber);
             socket.write('foo');
           });
+        });
+      });
+
+      describe('#id', function () {
+        it('should receive the id', function (done) {
+          primus.on('connection', function (spark) {
+            socket.id(function (id) {
+              expect(id).to.equal(spark.id);
+              spark.end();
+              done();
+            });
+          });
+
+          var socket = new Socket('http://localhost:'+ server.portnumber);
         });
       });
     });

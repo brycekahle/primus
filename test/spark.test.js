@@ -5,6 +5,7 @@ describe('Spark', function () {
     , Primus = common.Primus
     , http = require('http')
     , expect = common.expect
+    , Spark = Primus.Spark
     , server
     , primus;
 
@@ -51,6 +52,20 @@ describe('Spark', function () {
     });
 
     var spark = new primus.Spark();
+  });
+
+  it('emits a `readyStateChange` event when the readyState changes', function (done) {
+    var spark = new primus.Spark();
+
+    expect(spark.readyState).to.equal(Spark.OPEN);
+
+    spark.on('readyStateChange', function () {
+      expect(spark.readyState).to.equal(Spark.CLOSED);
+      done();
+    });
+
+    spark.readyState = Spark.OPEN;
+    spark.readyState = Spark.CLOSED;
   });
 
   it('transforms querystrings', function()  {
@@ -106,8 +121,32 @@ describe('Spark', function () {
     });
   });
 
+  describe('#reserved', function () {
+    it('sees all incoming:: and outgoing:: as reserved', function () {
+      var spark = new primus.Spark();
+
+      expect(spark.reserved('incoming::error')).to.equal(true);
+      expect(spark.reserved('outgoing::error')).to.equal(true);
+      expect(spark.reserved('incoming::')).to.equal(true);
+      expect(spark.reserved('outgoing::')).to.equal(true);
+      expect(spark.reserved('somwhatincoming::error')).to.equal(false);
+      expect(spark.reserved('somwhatoutgoing::error')).to.equal(false);
+      expect(spark.reserved('INCOMING::ERROR')).to.equal(false);
+      expect(spark.reserved('OUTGOING::ERROR')).to.equal(false);
+      expect(spark.reserved('INCOMING::')).to.equal(false);
+      expect(spark.reserved('OUTGOING::')).to.equal(false);
+    });
+
+    it('sees specific events as reserved', function () {
+      var spark = new primus.Spark();
+
+      expect(spark.reserved('error')).to.equal(true);
+      expect(spark.reserved('ERROR')).to.equal(false);
+    });
+  });
+
   describe('#end', function () {
-    it('emits a `disconnection` event on the primus instance when destoryed', function (done) {
+    it('emits a `disconnection` event on the primus instance when destroyed', function (done) {
       primus.on('disconnection', function (socket) {
         expect(socket).to.equal(spark);
         done();
@@ -144,6 +183,38 @@ describe('Spark', function () {
       var spark = new primus.Spark();
       spark.on('outgoing::end', done);
       spark.end();
+    });
+  });
+
+  describe('#timeout', function () {
+    it('disconnects if the timeout expires', function (done) {
+      this.timeout(50);
+      var primus = new Primus(server, { timeout: 25 });
+
+      primus.on('disconnection', function (socket) {
+        expect(socket).to.equal(spark);
+        done();
+      });
+
+      primus.on('connection', function (socket) {
+        expect(socket).to.equal(spark);
+      });
+
+      var spark = new primus.Spark();
+    });
+
+    it('can disable the disconnect timeout', function (done) {
+      var primus = new Primus(server, { timeout: false })
+        , spark = new primus.Spark();
+
+      spark.on('data', function (msg) {
+        expect(msg).to.equal('foo');
+        expect(spark.timeout).to.equal(null);
+        done();
+      });
+
+      expect(spark.timeout).to.equal(null);
+      spark.emit('data', 'foo');
     });
   });
 
@@ -193,6 +264,29 @@ describe('Spark', function () {
       });
 
       expect(spark.write(data)).to.equal(true);
+    });
+  });
+
+  describe('.initialise', function () {
+    it('allows overriding the initialise function', function (done) {
+      Spark.prototype.initialise = function init() {
+        Spark.prototype.__initialise.length = 1;
+        done();
+      };
+
+      var spark = new Spark(primus);
+    });
+
+    it('get initialise returns the last added function', function () {
+      expect(Spark.prototype.initialise).to.equal(Spark.prototype.__initialise[0]);
+
+      function foo() {}
+
+      Spark.prototype.initialise = foo;
+      expect(Spark.prototype.initialise).to.equal(Spark.prototype.__initialise[1]);
+      expect(Spark.prototype.initialise).to.equal(foo);
+
+      Spark.prototype.__initialise.length = 1;
     });
   });
 });

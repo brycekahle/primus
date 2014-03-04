@@ -1,6 +1,6 @@
 # Primus
 
-[![Build Status](https://travis-ci.org/primus/primus.png)](https://travis-ci.org/primus/primus)
+[![Build Status](https://travis-ci.org/primus/primus.png?branch=master)](https://travis-ci.org/primus/primus)
 [![NPM version](https://badge.fury.io/js/primus.png)](http://badge.fury.io/js/primus)
 
 Primus, the creator god of transformers but now also known as universal wrapper
@@ -15,7 +15,7 @@ various of real-time frameworks.
    of code. No more API rewrites needed when your project requirements change,
    the framework get abandoned or simply breaks down.
 2. Built-in reconnect, it just works. The reconnect is controlled by a
-   randomized exponential backoff algorithm to reduce server stress.
+   randomised exponential back-off algorithm to reduce server stress.
 3. Offline detection, Primus is smart enough to detect when users drop their
    internet connection (switching WIFI points/cell towers for example) and
    reconnects when they are back online.
@@ -58,6 +58,7 @@ npm install primus --save
   - [Destruction](#destruction)
 - [Connecting from the browser](#connecting-from-the-browser)
 - [Events](#events)
+- [Heartbeats and latency](#heartbeats-and-latency)
 - [Supported real-time frameworks](#supported-real-time-frameworks)
   - [Engine.IO](#engineio)
   - [WebSockets](#websockets)
@@ -72,8 +73,10 @@ npm install primus --save
 - [Example](#example)
    - [Community](#community)
 - [FAQ](#FAQ)
-  - [Scaling](#scaling)
-  - [Express](#express)
+  - [Scaling](#what-is-the-best-way-to-scale-primus)
+  - [Express](#how-do-i-use-primus-with-express-3)
+  - [RequireJS](#is-requirejs-supported)
+  - [Custom headers](#can-i-send-custom-headers-to-the-server)
 - [Versioning](#versioning)
   - [History](#history)
   - [Convention](#convention)
@@ -105,13 +108,19 @@ var server = http.createServer(/* request handler */)
 
 The following options can be provided:
 
-Name                | Description                             | Default       
---------------------|-----------------------------------------|---------------
-authorization       | Authorization handler                   | `null`
-pathname            | The URL namespace that Primus can own   | `/primus`
-parser              | Message encoder for all communication   | `JSON`
-transformer         | The tranformer we should use internally | `websockets`
-plugin              | The plugins that should be applied      | `{}`
+Name                | Description                               | Default       
+--------------------|-------------------------------------------|---------------
+authorization       | Authorization handler                     | `null`
+pathname            | The URL namespace that Primus can own     | `/primus`
+parser              | Message encoder for all communication     | `JSON`
+transformer         | The tranformer we should use internally   | `websockets`
+plugin              | The plugins that should be applied        | `{}`
+timeout             | The heartbeat timeout                     | `35000`
+
+The heartbeat timeout is used to forcefully disconnect a spark if no data is
+received from the client within the specified amount of time. It is possible
+to completely disable the heartbeat timeout by setting the value of the
+`timeout` option to `false`.
 
 In addition to support different frameworks we've also made it possible to use
 custom encoding and decoding libraries. We're using `JSON` by default but you
@@ -135,9 +144,13 @@ primus.library();
 
 Which returns the client-side library. It's not minified as that is out of the
 scope of this project. You can store this on a CDN or on your static server. Do
-whatever you want with it, but I would advice you to regenerate that file every
-time you redeploy so it always contains a client side library that is compatible
-with your back-end. To save the file you can use:
+whatever you want with it, but remember to regenerate it every time you change
+Primus server options. This is important because some properties of the client
+are set using the server configuration. For example if you change the
+`pathname`, the client should be regenerated to reflect that change and work
+correctly. We advice you to regenerate the library every time you redeploy so
+you always have a client compatible with your back-end. To save the file you
+can use:
 
 ```js
 primus.save(__dirname +'/primus.js');
@@ -154,7 +167,7 @@ primus.save(__dirname +'/primus.js', function save(err) {
 
 But to make it easier for you during development we've automatically added an
 extra route to the supplied HTTP server, this will serve the library for you so
-you don't have to save it. Please note, that this route isn't optimized for
+you don't have to save it. Please note, that this route isn't optimised for
 serving static assets and should only be used during development. In your HTML
 page add:
 
@@ -207,6 +220,11 @@ The `spark.headers` property contains contains the headers of either the request
 that started a handshake with the server or the headers of the actual real-time
 connection. This depends on the module you are using.
 
+*Please note that sending custom headers from the client to the server is
+impossible as not all transports that these transformers support can add custom
+headers to a request (JSONP for example). If you need to send custom data, use a
+query string when connecting*
+
 #### spark.address
 
 The `spark.address` property contains the `ip` and `port` of the
@@ -223,7 +241,7 @@ active at the time you access this property.*
 The `spark.query` contains the query string you used to connect to server. It's
 parsed to an object. Please note that this is not available for all supported
 transformers, but it's proven to be to useful to not implement it because one
-silly transformer refuses to support it. Yes.. I'm looking at you SockJS.
+silly transformer refuses to support it. Yes, I'm looking at you SockJS.
 
 #### spark.id
 
@@ -517,7 +535,7 @@ There are 2 important options that we're going to look a bit closer at.
 ##### Reconnect
 
 When the connection goes down unexpectedly a automatic reconnect process is
-started. It's using a randomized exponential backoff algorithm to prevent
+started. It's using a randomised exponential back-off algorithm to prevent
 clients from DDoSing your server when you reboot as they will all be re-connecting at
 different times. The reconnection can be configured using the `options` argument
 in `Primus` and you should add these options to the `reconnect` property:
@@ -595,39 +613,37 @@ access will try to reconect again**.
 We automatically disable this for you when you've set the authorization before
 you save the library.
 
-But there are always use cases where reconnection is not advice for your
+But there are always use cases where reconnection is not advised for your
 application. In these cases we've provided a way to completely disable the
 reconnection, this is done by setting the `strategy` to `false`:
 
 ```js
 var primus = new Primus(url, { strategy: false });
 ```
-
-If you want manually control the reconnecting you can should just call
-`primus.end()` to close the connection and `primus.open()` to start a
-connection. **Don't do manual reconnection if you haven't set the strategy to
-false**.
+If you want to manually control the reconnection you can call `primus.end()`
+to close the connection and `primus.open()` to enstablish a new one. **Don't
+do manual reconnection if you haven't set the strategy to false**.
 
 [reconnect]: #reconnect
 [strategy]: #strategy
 
 ##### transport
 
-The transport object allows you to add transport specific configuration in to
-Primus. We only recommend using this if understand and accept the following
+The transport object allows you to add a transport specific configuration.
+We only recommend using this if you understand and accept the following
 consequences:
 
-- Primus will attempt to override properties that it needs in order to function
-  properly inside this configuration.
-- We might start using options without any announcements or major version bumps.
+- Primus will try to override configuration properties that are needed to
+  ensure a correct functioning.
+- We might start using options without any announcement or major version bump.
 - Expect your client and it's connection to malfunction once you switch between
-  different transports as these are configuration changes that are specific to
-  the bundled transformer library/client.
-- Bugs and bug reports that caused by using this functionality is closed
+  different transports, as these configurations are specific to the bundled
+  transformer library/client.
+- Bugs and bug reports caused by using this functionality are closed
   immediately.
 
-Having that said, this does give you ultimate freedom while still getting the
-benefits of Primus.
+Having that said, this gives you total freedom while still getting the benefits
+of Primus.
 
 #### primus.write(message)
 
@@ -815,10 +831,64 @@ Event                 | Usage       | Location      | Description
 `online`              | **public**  | client        | We've regained a network connection
 `offline`             | **public**  | client        | We've lost our internet connection
 `log`                 | **public**  | server        | Log messages.
+`readyStateChange`    | **public**  | client/spark  | The readyState has changed.
 
 As a rule of thumb assume that every event that is prefixed with `incoming::` or
 `outgoing::` is reserved for internal use only and that emitting such events your
-self will most likely result in c̮̫̞͚͉̮̙͕̳̲͉̤̗̹̮̦̪̖̱h̛͍͙̖̟͕̹͕̙̦̣̲̠̪̯̳͖̝̩a̴̝̦͇̥̠̟͚̳̤̹̗̻̭͍͖͕͓̻o̥̹̮̙͔̗͍͚͓̗̦̹͈͙͕̘̮͖̝ș̗̲̤̗̮͈̙͈̹̼̣̹̖̱̤̼̺̤ ̻͙̗̥̠̱͇̱̝̟̺͍̺̼͆̅̓̓̇a̜̖͈͇͎͙̲̙̗͇̫̘̖̹͖͓͔̺̱n̹͓̮͇̯̜̤̗͍̯̰̫̫̖̰ͬ͌ͬͫd͚̪͚̭͚̥̰̤̟͎̝̲̯̭̹̭̙̼̤ ͖̞̙̹͈͚̥̦͚͉͖̼̬͓͚̳͉͙͎d̴͚̱̮̗͍̩̻̰̣̫͉͈̞̲͉̫̞͔ẻͩͦ̃͌̿̐ͪͩ̌̇͂̆̑͐ͣ ҉̲͉͔͎̤̼̘͇̮̥̻̜̹̥͚̲̻̖s̶̗̻̫̼̠̳̗̺̤̗̳͈̪̮̗̝͇͈t̙͇͕̺̱̼̤̗̰̬̣͌ͬͧ͊́ͧͩ͌r͌̐̓̃ͥ̄ͤ͑̈ͬ͆ͬ͂̇̿̅ ҉̙̼̳̭̙͍̻̱̠͈̮̺̣̝̱̙̺͉ư̳͎̻͔̯̪̝͕͚̣̜̼̞͇̠̘̠̪c̨̫͙͙̬̰̰̫̐͋͊͑̌̾̉͆t͚̗͕̝̤̗͕̲̮̝̼̺͙͚̟͓̣̥͍ĭ͙̘̩̖͇͎̆̍̿̾ͤ̔̉̈̂̾̈ͭo̬̠̝͈̺̙̮̬̗̪̤͕͇͕̰̮͖͉̬n̙̪̤̝̹͖͖̻̬̹͙̞̗͓̞̭̜̠̟
+self will most likely result in c̮̫̞͚͉̮̙͕̳̲͉̤̗̹̮̦̪̖̱h̛͍͙̖̟͕̹͕̙̦̣̲̠̪̯̳͖̝̩a̴̝̦͇̥̠̟͚̳̤̹̗̻̭͍͖͕͓̻o̥̹̮̙͔̗͍͚͓̗̦̹͈͙͕̘̮͖̝ș̗̲̤̗̮͈̙͈̹̼̣̹̖̱̤̼̺̤ ̻͙̗̥̠̱͇̱̝̟̺͍̺̼͆̅̓̓̇a̜̖͈͇͎͙̲̙̗͇̫̘̖̹͖͓͔̺̱n̹͓̮͇̯̜̤̗͍̯̰̫̫̖̰ͬ͌ͬͫd͚̪͚̭͚̥̰̤̟͎̝̲̯̭̹̭̙̼̤ ͖̞̙̹͈͚̥̦͚͉͖̼̬͓͚̳͉͙͎d̴͚̱̮̗͍̩̻̰̣̫͉͈̞̲͉̫̞͔ẻͩͦ̃͌̿̐ͪͩ̌̇͂̆̑͐ͣ ҉̲͉͔͎̤̼̘͇̮̥̻̜̹̥͚̲̻̖s̶̗̻̫̼̠̳̗̺̤̗̳͈̪̮̗̝͇͈t̙͇͕̺̱̼̤̗̰̬̣͌ͬͧ͊́ͧͩ͌r͌̐̓̃ͥ̄ͤ͑̈ͬ͆ͬ͂̇̿̅ ҉̙̼̳̭̙͍̻̱̠͈̮̺̣̝̱̙̺͉ư̳͎̻͔̯̪̝͕͚̣̜̼̞͇̠̘̠̪c̨̫͙͙̬̰̰̫̐͋͊͑̌̾̉͆t͚̗͕̝̤̗͕̲̮̝̼̺͙͚̟͓̣̥͍ĭ͙̘̩̖͇͎̆̍̿̾ͤ̔̉̈̂̾̈ͭo̬̠̝͈̺̙̮̬̗̪̤͕͇͕̰̮͖͉̬n̙̪̤̝̹͖͖̻̬̹͙̞̗͓̞̭̜̠̟.
+
+To make it easier for developers to emit events on primus it self we've added an
+small helper function that checks if the event you want to emit is reserved for
+Primus only. This would be all `incoming::` and `outgoing::` prefixed events and
+the events listed above. This method is called `<class>.reserved()` and it's
+implemented on the `Spark`:
+
+```js
+primus.on('connection', function connection(spark) {
+  spark.on('data', function (data) {
+    //
+    // Just imagine that we receive an array of arguments from the client which
+    // first argument is the name of the event that we need to emit and the
+    // second argument are the arguments for function.
+    //
+    if (spark.reserved(data.args[0])) return;
+
+    spark.emit.apply(spark, data.args[0]);
+  });
+});
+```
+
+But also the client:
+
+```js
+var primus = new Primus('http://example.bar');
+
+primus.on('data', function (data) {
+  if (primus.reserved(data.args[0])) return;
+
+  primus.emit.apply(primus, data.args);
+});
+```
+
+And of course the `Primus` instance as well.
+
+### Heartbeats and latency
+
+Heartbeats are used in Primus to figure out if we still have an active, working
+and reliable connection with the server. These heartbeats are send from the
+**client** to the server.
+
+the heartbeats will only be send when there is an idle connection, so there is
+very little to no overhead at all. The main reason for this is that we already
+know that the connection is alive when we receive data from the server.
+
+The heartbeat package that we send over the connection is
+`primus::ping::<timestamp>`. The server will echo back the exact same package.
+This allows Primus to also calculate the latency between messages by simply
+getting the `<timestamp>` from echo and comparing it with the local time. This
+heartbeat is then stored in a `primus.latency` properly. The initial value of
+the `primus.latency` is to the time it took to send an `open` package and to
+actually receive a confirmation that the connection has been opened.
 
 ### Supported Real-time Frameworks
 
@@ -1028,13 +1098,13 @@ var primus = new Primus(server, { plugin: {
 The server function is only executed on the server side and receives 2
 arguments:
 
-1. A reference to the initialized Primus server.
+1. A reference to the initialised Primus server.
 2. The options that were passed in the `new Primus(server, { options })`
    constructor. So the plugin can be configured through the same interface.
 
 The client receives the same arguments:
 
-1. A reference to the initialized Primus client.
+1. A reference to the initialised Primus client.
 2. The options that were passed in the `new Primus(url, { options })`
    constructor. So the plugin can be configured through the same interface.
 
@@ -1249,6 +1319,21 @@ see it be merged automatically.
   </dd>
 </dl>
 
+<dl>
+  <dt><a href="https://github.com/zeMirco/primus-express-session">primus-express-session</a></dt>
+  <dd>
+    Share a user session between Express and Primus.
+  </dd>
+  <dd>
+    <a href="https://travis-ci.org/zeMirco/primus-express-session">
+      <img src="https://travis-ci.org/zeMirco/primus-express-session.png?branch=master" alt="Build Status" />
+    </a>
+    <a href="http://badge.fury.io/js/primus-express-session">
+      <img src="https://badge.fury.io/js/primus-express-session.png" alt="NPM version" />
+    </a>
+  </dd>
+</dl>
+
 
 In addition to these community provided plugins, the Primus project also
 provides the following plugins:
@@ -1309,18 +1394,18 @@ https://github.com/primus/primus/wiki/Production
 
 ### FAQ
 
-#### Scaling
+#### What is the best way to scale Primus
 
 Scaling Primus is as simple as sticking it behind a load balancer that supports
-sticky sessions and run multiple versions of your application. This is a vital
-feature that your load balancer needs to support. This ensures that the incoming
-requests always go back to the same server. If your load balancer does not
-support sticky sessions, get another one. I highly recommend
-[HAProxy](http://haproxy.1wt.eu/). According to my own testing it the fastest
-and best proxy available that supports WebSockets. See
+[sticky sessions](https://github.com/primus/primus/issues/147) and run multiple
+versions of your application. This is a vital feature that your load balancer
+needs to support. This ensures that the incoming requests always go back to the
+same server. If your load balancer does not support sticky sessions, get another
+one. I highly recommend [HAProxy](http://haproxy.1wt.eu/). According to my own
+testing it the fastest and best proxy available that supports WebSockets. See
 https://github.com/observing/balancerbattle for more detailed information.
 
-#### Express
+#### How do I use Primus with Express 3
 
 Express 3's `express()` instance isn't a valid HTTP server. In order to make it
 work with `Primus` and other real-time transformers you need to feed the instance
@@ -1343,7 +1428,7 @@ var server = require('http').createServer(app)
 server.listen(port);
 ```
 
-#### Require.js
+#### Is require.js supported
 
 Require.js is supported to a certain degree. The `primus.js` core file should be
 compatible with require.js but it could be that the transformer of your choosing
@@ -1354,6 +1439,20 @@ general advice for this is to drop require.js in favour of plain script loading
 or use of browserify where possible. If you feel strong about require.js we accept
 pull requests that improve this behaviour or helps us save guard against these
 issues.
+
+#### Can I send custom headers to the server
+
+It is not possible to send custom headers from the client to the server. This is
+because these headers need to be set by the actual transports that the
+transformers are using. The only transport that would support this would be AJAX
+polling. To send custom data to the server use a query string in your connection
+URL, as this is something that all transports support. The only noticeable
+exception for this case is SockJS as it doesn't allow query strings in the
+connection URL.
+
+```js
+var primus = new Primus('http://localhost:8080/?token=1&name=foo');
+```
 
 ### Versioning
 
@@ -1393,7 +1492,7 @@ semver as closely as possible but this is how we use our version numbering:
 
 #### Release cycle
 
-There isn't a steady or monthly release cycle. I usually release a new 
+There isn't a steady or monthly release cycle. We usually release a new 
 version when:
 
 1. A critical bug is discovered.
