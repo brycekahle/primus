@@ -336,11 +336,10 @@ utils.amendUrl = function(url) {
 
 utils.trans_specific_url = function(url, protocol) {
     // force https for websocket, and http for others
-    if (protocol === 'websocket') {
-        return url.replace('http://', 'https://');
-    } else {
+    if (protocol !== 'websocket') {
         return url.replace('https://', 'http://');
     }
+    return url;
 };
 
 // IE doesn't support [].indexOf.
