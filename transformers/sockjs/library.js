@@ -334,6 +334,15 @@ utils.amendUrl = function(url) {
     return url;
 };
 
+utils.trans_specific_url = function(url, protocol) {
+    // force https for websocket, and http for others
+    if (protocol === 'websocket') {
+        return url.replace('http://', 'https://');
+    } else {
+        return url.replace('https://', 'http://');
+    }
+};
+
 // IE doesn't support [].indexOf.
 utils.arrIndexOf = function(arr, obj){
     for(var i=0; i < arr.length; i++){
@@ -1160,6 +1169,7 @@ SockJS.prototype._try_next_protocol = function(close_event) {
 
             var connid = utils.random_string(8);
             var trans_url = that._base_url + '/' + that._server + '/' + connid;
+            trans_url = utils.trans_specific_url(trans_url, protocol);
             that._debug('Opening transport:', protocol, ' url:'+trans_url,
                         ' RTO:'+that._options.rto);
             that._transport = new SockJS[protocol](that, trans_url,
