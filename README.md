@@ -47,6 +47,15 @@ Primus is released in `npm` and can be installed using:
 npm install primus --save
 ```
 
+### Before Starting
+
+If you deploy your application behind a reverse proxy (Nginx, HAProxy, etc.) you
+might need to add WebSocket specific settings to it's configuration files. If
+you intent to use WebSockets please ensure that these settings have been added.
+There are some example configuration files available in the
+[observing/balancerbattle](https://github.com/observing/balancerbattle)
+repository.
+
 ### Table of Contents
 
 - [Introduction](#primus)
@@ -68,6 +77,7 @@ npm install primus --save
   - [SockJS](#sockjs)
   - [Socket.IO](#socketio)
 - [Transformer Inconsistencies](#transformer-inconsistencies)
+- [Middleware](#middleware)
 - [Plugins](#plugins)
   - [Extending the Spark / Socket](#extending-the-spark--socket)
   - [Transforming and intercepting messages](#transforming-and-intercepting-messages)
@@ -158,13 +168,14 @@ retrieved using:
 primus.library();
 ```
 
-Which returns the client-side library. It's not minified as that is out of the
-scope of this project. You can store this on a CDN or on your static server. Do
-whatever you want with it, but remember to regenerate it every time you change
+Which returns the client-side library as a string (which can then be minified or
+even have more code added to it). It does not come pre-minified as that is out
+of the scope of this project. You can store this on a CDN or on your static server.
+Do whatever you want with it, but remember to regenerate it every time you change
 Primus server options. This is important because some properties of the client
 are set using the server configuration. For example if you change the
 `pathname`, the client should be regenerated to reflect that change and work
-correctly. We advice you to regenerate the library every time you redeploy so
+correctly. We advise you to regenerate the library every time you redeploy so
 you always have a client compatible with your back-end. To save the file you
 can use:
 
@@ -203,7 +214,8 @@ location. It's always available at:
 <protocol>://<server location>/<pathname>/primus.js
 ```
 
-The client is cross domain compatible so you don't have to serve it from the
+Here `<pathname>` is the `pathname` set in server options above. The client
+is cross domain compatible so you don't have to serve it from the
 same domain you're running Primus on. But please note, that the real-time
 framework you're using might be tied to same domain restrictions.
 
