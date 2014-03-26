@@ -231,6 +231,11 @@ try {
  */
 function Primus(url, options) {
   if (!(this instanceof Primus)) return new Primus(url, options);
+  if ('function' !== typeof this.client) {
+    var message = 'The client library has not been compiled correctly, ' +
+      'see https://github.com/primus/primus#client-library for more details';
+    return this.critical(new Error(message));
+  }
 
   if ('object' === typeof url) {
     options = url;
@@ -240,6 +245,9 @@ function Primus(url, options) {
   }
 
   var primus = this;
+
+  // The maximum number of messages that can be placed in queue.
+  options.queueSize = 'queueSize' in options ? options.queueSize : Infinity;
 
   // Connection timeout duration.
   options.timeout = 'timeout' in options ? options.timeout : 10e3;
@@ -405,12 +413,12 @@ try {
     // and guess at a value from the 'href' value
     //
     if (!data.port) {
-        if (!data.href) data.href = '';
-        if ((data.href.match(/\:/g) || []).length > 1) {
-            data.port = data.href.split(':')[2].split('/')[0];
-        } else {
-            data.port = ('https' === data.href.substr(0, 5)) ? 443 : 80;
-        }
+      if (!data.href) data.href = '';
+      if ((data.href.match(/\:/g) || []).length > 1) {
+        data.port = data.href.split(':')[2].split('/')[0];
+      } else {
+        data.port = ('https' === data.href.substr(0, 5)) ? 443 : 80;
+      }
     }
 
     //
@@ -508,7 +516,7 @@ Primus.prototype.plugin = function plugin(name) {
  */
 Primus.prototype.reserved = function reserved(evt) {
   return (/^(incoming|outgoing)::/).test(evt)
-  || evt in reserved.events;
+  || evt in this.reserved.events;
 };
 
 /**
@@ -555,6 +563,13 @@ Primus.prototype.initialise = function initialise(options) {
   primus.on('incoming::open', function opened() {
     if (primus.attempt) primus.attempt = null;
 
+    //
+    // The connection has been openend so we should set our state to
+    // (writ|read)able so our stream compatibility works as intended.
+    //
+    primus.writable = true;
+    primus.readable = true;
+
     var readyState = primus.readyState;
 
     primus.readyState = Primus.OPEN;
@@ -570,7 +585,7 @@ Primus.prototype.initialise = function initialise(options) {
         primus.write(primus.buffer[i]);
       }
 
-      primus.buffer.length = 0;
+      primus.buffer = [];
     }
 
     primus.latency = +new Date() - start;
@@ -644,7 +659,7 @@ Primus.prototype.initialise = function initialise(options) {
     });
   });
 
-  primus.on('incoming::end', function end(intentional) {
+  primus.on('incoming::end', function end() {
     var readyState = primus.readyState;
 
     //
@@ -660,6 +675,9 @@ Primus.prototype.initialise = function initialise(options) {
     if (primus.timers.connect) primus.end();
     if (readyState !== Primus.OPEN) return;
 
+    this.writable = false;
+    this.readable = false;
+
     //
     // Clear all timers in case we're not going to reconnect.
     //
@@ -668,26 +686,21 @@ Primus.prototype.initialise = function initialise(options) {
     }
 
     //
-    // Some transformers emit garbage when they close the connection. Like the
-    // reason why it closed etc. we should explicitly check if WE send an
-    // intentional message.
-    //
-    if ('primus::server::close' === intentional) {
-      return primus.emit('end');
-    }
-
-    //
-    // Always, call the `close` event as an indication of connection disruption.
-    // This also emitted by `primus#end` so for all cases above, it's still
-    // emitted.
+    // Fire the `close` event as an indication of connection disruption.
+    // This is also fired by `primus#end` so it is emitted in all cases.
     //
     primus.emit('close');
 
     //
-    // The disconnect was unintentional, probably because the server shut down.
-    // So we should just start a reconnect procedure.
+    // The disconnect was unintentional, probably because the server has
+    // shutdown, so if the reconnection is enabled start a reconnect procedure.
     //
-    if (~primus.options.strategy.indexOf('disconnect')) primus.reconnect();
+    if (~primus.options.strategy.indexOf('disconnect')) {
+      return primus.reconnect();
+    }
+
+    primus.emit('outgoing::end');
+    primus.emit('end');
   });
 
   //
@@ -864,7 +877,14 @@ Primus.prototype.write = function write(data) {
       primus.emit('outgoing::data', packet);
     });
   } else {
-    primus.buffer.push(data);
+    var buffer = primus.buffer;
+
+    //
+    // If the buffer is at capacity, remove the first item.
+    //
+    if (buffer.length === primus.options.queueSize) buffer.splice(0, 1);
+
+    buffer.push(data);
   }
 
   return true;
@@ -935,10 +955,10 @@ Primus.prototype.timeout = function timeout() {
           .clearTimeout('connect');
   }
 
-  primus.timers.connect = setTimeout(function setTimeout() {
+  primus.timers.connect = setTimeout(function expired() {
     remove(); // Clean up old references.
 
-    if (Primus.readyState === Primus.OPEN || primus.attempt) return;
+    if (primus.readyState === Primus.OPEN || primus.attempt) return;
 
     primus.emit('timeout');
 
@@ -1080,6 +1100,7 @@ Primus.prototype.end = function end(data) {
   if (data) this.write(data);
 
   this.writable = false;
+  this.readable = false;
 
   var readyState = this.readyState;
   this.readyState = Primus.CLOSED;
@@ -1190,6 +1211,11 @@ Primus.prototype.uri = function uri(options, querystring) {
   options.pathname = 'pathname' in options ? options.pathname : this.pathname.slice(1);
   options.port = 'port' in options ? options.port : url.port || (options.secure ? 443 : 80);
   options.host = 'host' in options ? options.host : url.hostname || url.host.replace(':'+ url.port, '');
+
+  //
+  // Allow transformation of the options before we construct a full URL from it.
+  //
+  this.emit('outgoing::url', options);
 
   //
   // Automatically suffix the protocol so we can supply `ws` and `http` and it gets

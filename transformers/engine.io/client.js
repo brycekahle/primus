@@ -35,6 +35,18 @@ module.exports = function client() {
     primus.socket = socket = factory(primus.merge(primus.transport,
       primus.url,
       primus.uri({ protocol: 'http', query: true, object: true }), {
+      //
+      // Never remember upgrades as switching from a WIFI to a 3G connection
+      // could still get your connection blocked as 3G connections are usually
+      // behind a reverse proxy so ISP's can optimize mobile traffic by
+      // caching requests.
+      //
+      rememberUpgrade: false,
+
+      //
+      // Binary support in Engine.IO breaks a shit things. Turn it off for now.
+      //
+      forceBase64: true,
       path: this.pathname,
       transports: !primus.AVOID_WEBSOCKETS
         ? ['polling', 'websocket']

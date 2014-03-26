@@ -3,7 +3,7 @@
 var ParserError = require('./errors').ParserError
   , parse = require('querystring').parse
   , forwarded = require('forwarded-for')
-  , predefine = require('predefine')
+  , fuse = require('fusing')
   , u2028 = /\u2028/g
   , u2029 = /\u2029/g;
 
@@ -20,9 +20,11 @@ var ParserError = require('./errors').ParserError
  * @param {String} id An optional id of the socket, or we will generate one.
  * @api public
  */
-function Spark(primus, headers, address, query, id) {
-  var readable = predefine(this, predefine.READABLE)
-    , writable = predefine(this, predefine.WRITABLE)
+function Spark(primus, headers, address, query, id, request) {
+  this.fuse();
+
+  var readable = this.readable
+    , writable = this.writable
     , spark = this;
 
   readable('primus', primus);         // References to Primus.
@@ -33,6 +35,7 @@ function Spark(primus, headers, address, query, id) {
   readable('readable', true);         // Silly stream compatibility.
   writable('query', query || {});     // The query string.
   writable('timeout', null);          // Heartbeat timeout.
+  writable('http', request);          // Reference to an HTTP request.
 
   //
   // Parse our query string.
@@ -46,9 +49,9 @@ function Spark(primus, headers, address, query, id) {
   });
 }
 
-Spark.prototype.__proto__ = require('stream').prototype;
-Spark.readable = predefine(Spark.prototype, predefine.READABLE);
-Spark.writable = predefine(Spark.prototype, predefine.WRITABLE);
+fuse(Spark, require('stream'), {
+  defaults: false
+});
 
 //
 // Internal readyState's to prevent writes against close sockets.
@@ -83,6 +86,14 @@ Spark.writable('__readyState', Spark.OPEN);
 //
 Spark.readable('address', { get: function address() {
   return forwarded(this.remote, this.headers, this.primus.whitelist);
+}}, true);
+
+//
+// This gives access to the original HTTP request that was used to initialise
+// the connection.
+//
+Spark.readable('request', { get: function request() {
+  return this.http || this.headers['primus::req::backup'];
 }}, true);
 
 /**
@@ -176,7 +187,7 @@ Spark.readable('__initialise', [function initialise() {
     //
     spark.heartbeat();
 
-    primus.decoder(raw, function decoding(err, data) {
+    primus.decoder.call(spark, raw, function decoding(err, data) {
       //
       // Do a "save" emit('error') when we fail to parse a message. We don't
       // want to throw here as listening to errors should be optional.
@@ -369,7 +380,7 @@ Spark.readable('_write', function _write(data) {
   //
   if (Spark.CLOSED === spark.readyState) return false;
 
-  primus.encoder(data, function encoded(err, packet) {
+  primus.encoder.call(spark, data, function encoded(err, packet) {
     //
     // Do a "save" emit('error') when we fail to parse a message. We don't
     // want to throw here as listening to errors should be optional.
@@ -396,20 +407,28 @@ Spark.readable('_write', function _write(data) {
 /**
  * End the connection.
  *
+ * Options:
+ * - reconnect (boolean) Trigger client-side reconnect.
+ *
  * @param {Mixed} data Optional closing data.
+ * @param {Object} options End instructions.
  * @api public
  */
-Spark.readable('end', function end(data) {
+Spark.readable('end', function end(data, options) {
   if (Spark.CLOSED === this.readyState) return this;
 
+  options = options || {};
   var spark = this;
 
   if (data) spark.write(data);
 
   //
-  // Bypass the .write method as this message should not be transformed.
+  // If we want to trigger a reconnect do not send
+  // `primus::server::close`, otherwise bypass the .write method
+  // as this message should not be transformed.
   //
-  spark._write('primus::server::close');
+  if (!options.reconnect) spark._write('primus::server::close');
+
   spark.readyState = Spark.CLOSED;
 
   process.nextTick(function tick() {

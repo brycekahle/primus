@@ -53,10 +53,12 @@ npm install primus --save
   - [Advantages](#advantages)
 - [Installation](#installation)
 - [Getting Started](#getting-started)
-- [Connecting from the server](#connecting-from-the-server)
-  - [Broadcasting](#broadcasting)
-  - [Destruction](#destruction)
+  - [Client library](#client-library)
 - [Connecting from the browser](#connecting-from-the-browser)
+- [Connecting from the server](#connecting-from-the-server)
+- [Authorization](#authorization)
+- [Broadcasting](#broadcasting)
+- [Destruction](#destruction)
 - [Events](#events)
 - [Heartbeats and latency](#heartbeats-and-latency)
 - [Supported real-time frameworks](#supported-real-time-frameworks)
@@ -67,7 +69,7 @@ npm install primus --save
   - [Socket.IO](#socketio)
 - [Transformer Inconsistencies](#transformer-inconsistencies)
 - [Plugins](#plugins)
-  - [Extending the Spark/socket](#extending-the-spark--socket)
+  - [Extending the Spark / Socket](#extending-the-spark--socket)
   - [Transforming and intercepting messages](#transforming-and-intercepting-messages)
   - [Community Plugins](#community-plugins)
 - [Example](#example)
@@ -81,6 +83,7 @@ npm install primus --save
   - [History](#history)
   - [Convention](#convention)
   - [Release cycle](#release-cycle)
+- [Other languages](#other-languages)
 - [License](#license)
 
 ### Getting Started
@@ -113,9 +116,20 @@ Name                | Description                               | Default
 authorization       | Authorization handler                     | `null`
 pathname            | The URL namespace that Primus can own     | `/primus`
 parser              | Message encoder for all communication     | `JSON`
-transformer         | The tranformer we should use internally   | `websockets`
+transformer         | The transformer we should use internally  | `websockets`
 plugin              | The plugins that should be applied        | `{}`
 timeout             | The heartbeat timeout                     | `35000`
+origins             | **cors** List of origins                  | `*`
+methods             | **cors** List of accepted HTTP methods    | `GET,HEAD,PUT,POST,DELETE,OPTIONS`
+credentials         | **cors** Allow sending of credentials     | `true`
+maxAge              | **cors** Cache duration of cors preflight | `30 days`
+headers             | **cors** Allowed headers                  | `false`
+exposed             | **cors** Headers exposed to the client    | `false`
+
+The options that are prefixed with **cors** are supplied to our
+[access-control](http://github.com/primus/access-control) module which handles
+HTTP Access Control (CORS), so for a more detailed explanation of these options
+check it out.
 
 The heartbeat timeout is used to forcefully disconnect a spark if no data is
 received from the client within the specified amount of time. It is possible
@@ -133,6 +147,8 @@ var primus = new Primus(server, { parser: 'JSON' });
 ```
 
 All parsers have an `async` interface for error handling.
+
+#### Client library
 
 As most libraries come with their own client-side framework for making the
 connection we've also created a small wrapper for this. The library can be
@@ -204,11 +220,11 @@ Disconnects are announced using a `disconnection` event:
 
 ```js
 primus.on('disconnection', function (spark) {
-  // the spark that disconnected
+// the spark that disconnected
 });
 ```
 
-The `spark` the actual real-time socket/connection. Sparks have a really low
+The `spark` argument is the actual real-time socket/connection. Sparks have a really low
 level interface and only expose a couple properties that are cross engine
 supported. The interface is modeled towards a Node.js stream compatible
 interface. So this will include all methods that are available on the 
@@ -216,7 +232,7 @@ interface. So this will include all methods that are available on the
 
 #### spark.headers
 
-The `spark.headers` property contains contains the headers of either the request
+The `spark.headers` property contains the headers of either the request
 that started a handshake with the server or the headers of the actual real-time
 connection. This depends on the module you are using.
 
@@ -250,6 +266,14 @@ the frameworks refer to this as an `sessionid` which is confusing as it's only
 used for the duration of one single connection. You should not see this as an
 "session id" and expect it change to between disconnects and reconnects.
 
+#### spark.request
+
+The `spark.request` gives you access to the HTTP request that was used to
+initiate the real-time connection with the server. Please note that this request
+is already answered and closed (in most cases) so do not attempt to write or
+answer it in anyway. But it might be useful access methods that get added by
+middleware layers etc.
+
 #### spark.write(data)
 
 You can use the `spark.write` method to send data over the socket. The data is
@@ -261,9 +285,25 @@ handled.
 spark.write({ foo: 'bar' });
 ```
 
-#### spark.end()
+#### spark.end(data, options)
 
-The `spark.end()` closes the connection.
+You can use `spark.end` to close the connection. This method takes two optional
+arguments. The first if provided is the `data` to send to the client before
+closing the connection. The second is an options object used to customize the
+behavior of the method. By default the `spark.end` method closes the connection
+in a such way that the client knows it was intentional and it doesn't attempt a
+reconnection.
+
+```js
+spark.end(); // the client doesn't reconnect automatically
+```
+
+You can change this behavior and trigger a client-side reconnection using the
+`reconnect` option.
+
+```js
+spark.end(null, { reconnect: true }); // trigger a client-side reconnection
+```
 
 #### spark.emits(event, parser)
 
@@ -317,191 +357,7 @@ primus.on('connection', function (spark) {
 })
 ```
 
-### Broadcasting
-
-Broadcasting allows you to write a message to every connected `Spark` on your server.
-There are 2 different ways of doing broadcasting in Primus. The easiest way is to
-use the `Primus#write` method which will write a message to every connected user:
-
-```js
-primus.write(message);
-```
-
-There are cases where you only want to broadcast a message to a smaller group of
-users. To make it easier to do this, we've added a `Primus#forEach` method which
-allows you to iterate over all active connections.
-
-```js
-primus.forEach(function (spark, id, connections) {
-  if (spark.query.foo !== 'bar') return;
-
-  spark.write('message');
-});
-```
-
-### Authorization
-
-#### Server
-
-Primus has a built in auth hook that allows you to leverage the basic auth
-header to validate the connection. To setup the optional auth hook, use the
-`Primus#authorize` method:
-
-```js
-var authParser = require('basic-auth-parser');
-
-//
-// Add hook on server
-//
-primus.authorize(function (req, done) {
-  var auth;
-
-  try { auth = authParser(req.headers['authorization']) }
-  catch (ex) { return done(ex) }
-
-  //
-  // Do some async auth check
-  //
-  authCheck(auth, done);
-});
-
-primus.on('connection', function (spark) {
-  //
-  // You only get here if you make it through the auth hook!
-  //
-});
-```
-
-In this particular case, if an error is passed to `done` by `authCheck` or
-the exception handler then the connection attempt will never make it to the
-`primus.on('connection')` handler.
-
-The error you pass can either be a string or an object. If an object, it can
-have the following properties which affect the response sent to the client:
-
-- `statusCode`: The HTTP status code returned to the client. Defaults to 401.
-- `authenticate`: If set and `statusCode` is 401 then a `WWW-Authenticate`
-  header is added to the response, with a value equal to the `authenticate`
-  property's value.
-- `message`: The error message returned to the client. The response body will be
-  `{error: message}`, JSON-encoded.
-
-If the error you pass is a string then a 401 response is sent to the client
-with no `WWW-Authenticate` header and the string as the error message.
-
-For example to send 500 when an exception is caught, 403 for forbidden users
-and details of the basic auth scheme being used when authentication fails:
-
-```js
-primus.authorize(function (req, done) {
-  var auth;
-
-  if (req.headers.authorization) {
-    try { auth = authParser(req.headers.authorization) }
-    catch (ex) { 
-      ex.statusCode = 500;
-      return done(ex);
-    }
-
-    if ((auth.scheme === 'myscheme') &&
-        checkCredentials(auth.username, auth.password)) {
-      if (userAllowed(auth.username)) {
-        return done();
-      } else {
-        return done({ statusCode: 403, message: 'Go away!' });
-      }
-    }
-  }
-
-  done({
-    message: 'Authentication required',
-    authenticate: 'Basic realm="myscheme"'
-  });
-});
-```
-
-#### Client
-
-Unfortunately, the amount of detail you get in your client when authorization
-fails depends on the transformer in use. Most real-time frameworks supported
-by Primus don't expose the status code, headers or response body.
-
-The WebSocket transformer's underlying transport socket will fire an
-`unexpected-response` event with the HTTP request and response:
-
-```js
-client.on('outgoing::open', function ()
-{
-  client.socket.on('unexpected-response', function (req, res)
-  {
-    console.error(res.statusCode);
-    console.error(res.headers['www-authenticate']);
-
-    // it's up to us to close the request (although it will time out)
-    req.abort();
-
-    // it's also up to us to emit an error so primus can clean up
-    socket.socket.emit('error', 'authorization failed: ' + res.statusCode);
-  });
-});
-```
-
-If you want to read the response body then you can do something like this:
-
-```js
-client.on('outgoing::open', function ()
-{
-  client.socket.on('unexpected-response', function (req, res)
-  {
-    console.error(res.statusCode);
-    console.error(res.headers['www-authenticate']);
-
-    var data = '';
-
-    res.on('data', function (v) {
-      data += v;
-    });
-
-    res.on('end', function () {
-      // remember error message is in the 'error' property
-      socket.socket.emit('error', new Error(obj.error));
-    });
-  });
-});
-```
-
-If `unexpected-response` isn't caught (because the WebSocket transformer isn't
-being used or you don't listen for it) then you'll get an `error` event:
-
-```js
-primus.on('error', function error(err) {
-  console.error('Something horrible has happened', err, err.message);
-});
-```
-
-As noted above, `err` won't contain any details about the authorization failure
-so you won't be able to distinguish it from other errors.
-
-### Destruction
-
-In rare cases you might need to destroy the Primus instance you've created. You
-can use the `primus.destroy()` or `primus.end()` method for this. This method
-accepts an Object which allows you to configure how you want the connections to
-be destroyed:
-
-- `close` Close the HTTP server that Primus received. Defaults to `true`.
-- `end` End all active connections. Defaults to `true`.
-- `timeout` Clean up the server and optionally, it's active connections after
-  the specified amount of timeout. Defaults to `0`.
-
-The timeout is especially useful if you want gracefully shutdown your server but
-really don't want to wait an infinite amount of time.
-
-```js
-primus.destroy({ timeout: 10000 });
-```
-
-### Connecting from the Browser.
+### Connecting from the Browser
 
 Primus comes with its client framework which can be compiled using
 `primus.library()` as mentioned above. To create a connection you can simply
@@ -526,9 +382,10 @@ ping                | Ping interval to test connection        | `25000` ms
 pong                | Time the server has to respond to ping  | `10000` ms
 [strategy]          | Our reconnect strategies                | `"disconnect,online,timeout"`
 manual              | Manually open the connection            | `false`
-websockets          | Should we AVOID the usage of WebSockets | Boolean, is detected.
-network             | Use native `online`/`offline` detection | Boolean, is feature detected.
+websockets          | Should we AVOID the usage of WebSockets | Boolean, is detected
+network             | Use native `online`/`offline` detection | Boolean, is feature detected
 transport           | Transport specific configuration        | `{}`
+queueSize           | Number of messages that can be queued   | `Infinity`
 
 There are 2 important options that we're going to look a bit closer at.
 
@@ -716,7 +573,7 @@ primus.on('reconnect', function () {
 });
 ```
 
-### primus.on('reconnecting')
+#### primus.on('reconnecting')
 
 Looks a lot like the `reconnect` event mentioned above, but it's emitted when
 we've detected that connection went/is down and we're going to start a reconnect
@@ -799,6 +656,190 @@ a server side client.
   }
   ```
 
+### Authorization
+
+#### Server
+
+Primus has a built in auth hook that allows you to leverage the basic auth
+header to validate the connection. To setup the optional auth hook, use the
+`Primus#authorize` method:
+
+```js
+var authParser = require('basic-auth-parser');
+
+//
+// Add hook on server
+//
+primus.authorize(function (req, done) {
+  var auth;
+
+  try { auth = authParser(req.headers['authorization']) }
+  catch (ex) { return done(ex) }
+
+  //
+  // Do some async auth check
+  //
+  authCheck(auth, done);
+});
+
+primus.on('connection', function (spark) {
+  //
+  // You only get here if you make it through the auth hook!
+  //
+});
+```
+
+In this particular case, if an error is passed to `done` by `authCheck` or
+the exception handler then the connection attempt will never make it to the
+`primus.on('connection')` handler.
+
+The error you pass can either be a string or an object. If an object, it can
+have the following properties which affect the response sent to the client:
+
+- `statusCode`: The HTTP status code returned to the client. Defaults to 401.
+- `authenticate`: If set and `statusCode` is 401 then a `WWW-Authenticate`
+  header is added to the response, with a value equal to the `authenticate`
+  property's value.
+- `message`: The error message returned to the client. The response body will be
+  `{error: message}`, JSON-encoded.
+
+If the error you pass is a string then a 401 response is sent to the client
+with no `WWW-Authenticate` header and the string as the error message.
+
+For example to send 500 when an exception is caught, 403 for forbidden users
+and details of the basic auth scheme being used when authentication fails:
+
+```js
+primus.authorize(function (req, done) {
+  var auth;
+
+  if (req.headers.authorization) {
+    try { auth = authParser(req.headers.authorization) }
+    catch (ex) { 
+      ex.statusCode = 500;
+      return done(ex);
+    }
+
+    if ((auth.scheme === 'myscheme') &&
+        checkCredentials(auth.username, auth.password)) {
+      if (userAllowed(auth.username)) {
+        return done();
+      } else {
+        return done({ statusCode: 403, message: 'Go away!' });
+      }
+    }
+  }
+
+  done({
+    message: 'Authentication required',
+    authenticate: 'Basic realm="myscheme"'
+  });
+});
+```
+
+#### Client
+
+Unfortunately, the amount of detail you get in your client when authorization
+fails depends on the transformer in use. Most real-time frameworks supported
+by Primus don't expose the status code, headers or response body.
+
+The WebSocket transformer's underlying transport socket will fire an
+`unexpected-response` event with the HTTP request and response:
+
+```js
+client.on('outgoing::open', function ()
+{
+  client.socket.on('unexpected-response', function (req, res)
+  {
+    console.error(res.statusCode);
+    console.error(res.headers['www-authenticate']);
+
+    // it's up to us to close the request (although it will time out)
+    req.abort();
+
+    // it's also up to us to emit an error so primus can clean up
+    socket.socket.emit('error', 'authorization failed: ' + res.statusCode);
+  });
+});
+```
+
+If you want to read the response body then you can do something like this:
+
+```js
+client.on('outgoing::open', function ()
+{
+  client.socket.on('unexpected-response', function (req, res)
+  {
+    console.error(res.statusCode);
+    console.error(res.headers['www-authenticate']);
+
+    var data = '';
+
+    res.on('data', function (v) {
+      data += v;
+    });
+
+    res.on('end', function () {
+      // remember error message is in the 'error' property
+      socket.socket.emit('error', new Error(obj.error));
+    });
+  });
+});
+```
+
+If `unexpected-response` isn't caught (because the WebSocket transformer isn't
+being used or you don't listen for it) then you'll get an `error` event:
+
+```js
+primus.on('error', function error(err) {
+  console.error('Something horrible has happened', err, err.message);
+});
+```
+
+As noted above, `err` won't contain any details about the authorization failure
+so you won't be able to distinguish it from other errors.
+
+### Broadcasting
+
+Broadcasting allows you to write a message to every connected `Spark` on your server.
+There are 2 different ways of doing broadcasting in Primus. The easiest way is to
+use the `Primus#write` method which will write a message to every connected user:
+
+```js
+primus.write(message);
+```
+
+There are cases where you only want to broadcast a message to a smaller group of
+users. To make it easier to do this, we've added a `Primus#forEach` method which
+allows you to iterate over all active connections.
+
+```js
+primus.forEach(function (spark, id, connections) {
+  if (spark.query.foo !== 'bar') return;
+
+  spark.write('message');
+});
+```
+
+### Destruction
+
+In rare cases you might need to destroy the Primus instance you've created. You
+can use the `primus.destroy()` or `primus.end()` method for this. This method
+accepts an Object which allows you to configure how you want the connections to
+be destroyed:
+
+- `close` Close the HTTP server that Primus received. Defaults to `true`.
+- `end` End all active connections. Defaults to `true`.
+- `timeout` Clean up the server and optionally, it's active connections after
+  the specified amount of timeout. Defaults to `0`.
+
+The timeout is especially useful if you want gracefully shutdown your server but
+really don't want to wait an infinite amount of time.
+
+```js
+primus.destroy({ timeout: 10000 });
+```
+
 ### Events
 
 Primus is build upon the Stream and EventEmitter interfaces. This is a summary
@@ -832,6 +873,7 @@ Event                 | Usage       | Location      | Description
 `offline`             | **public**  | client        | We've lost our internet connection
 `log`                 | **public**  | server        | Log messages.
 `readyStateChange`    | **public**  | client/spark  | The readyState has changed.
+`outgoing::url`       | private     | client        | The options used to construct the URL.
 
 As a rule of thumb assume that every event that is prefixed with `incoming::` or
 `outgoing::` is reserved for internal use only and that emitting such events your
@@ -922,7 +964,7 @@ npm install engine.io-client --save
 And then you can access it from your server instance:
 
 ```js
-var Socket = primus.Socket;
+var Socket = primus.Socket
   , socket = new Socket('url');
 ```
 
@@ -930,7 +972,7 @@ var Socket = primus.Socket;
 
 If you are targeting a high end audience or maybe just something for internal
 uses you can use a pure WebSocket server. This uses the `ws` WebSocket module
-which is known to be one if not the fastest WebSocket server available in
+which is known to be one of, if not the fastest, WebSocket servers available in
 Node.js and supports all protocol specifications. To use pure WebSockets you
 need to install the `ws` module:
 
@@ -948,7 +990,7 @@ The `WebSockets` transformer comes with built-in client support and can be
 accessed using:
 
 ```js
-var Socket = primus.Socket;
+var Socket = primus.Socket
   , socket = new Socket('url');
 ```
 
@@ -973,7 +1015,7 @@ The `browserchannel` transformer comes with built-in node client support and can
 accessed using:
 
 ```js
-var Socket = primus.Socket;
+var Socket = primus.Socket
   , socket = new Socket('url');
 ```
 
@@ -1006,7 +1048,7 @@ npm install sockjs-client-node --save
 And then you can access it from your server instance:
 
 ```js
-var Socket = primus.Socket;
+var Socket = primus.Socket
   , socket = new Socket('url');
 ```
 
@@ -1037,7 +1079,7 @@ npm install socket.io-client --save
 And then you can access it from your server instance:
 
 ```js
-var Socket = primus.Socket;
+var Socket = primus.Socket
   , socket = new Socket('url');
 ```
 
@@ -1064,6 +1106,111 @@ of the transformer, we just `toLowerCase()` everything.
   submitted patches for these bugs, but they have been rejected for silly reasons.
   The bug causes closed connections to say open. If you're experiencing this you
   can apply this [patch](http://github.com/3rd-Eden/engine.io/commit/0cf81270e9d5700).
+
+### Middleware
+
+Primus has two ways of extending the functionality. We have [plugins](#plugins)
+but also support middleware. And there is an important difference between these.
+The middleware layers allows you to modify the incoming requests **before** they
+are passed in to the transformers. The middleware layer is only ran for the
+requests that are handled by Primus. 
+
+We support 2 kind of middleware, **async** and **sync** middleware. The main
+difference between these kinds is that sync middleware doesn't require a
+callback, it is completely optional. In Primus, we eat our own dog food. Various
+of components in Primus are implemented through middleware layers:
+
+- `cors`: Adds the Access Control headers.
+- `primus.js`: It serves our `primus.js` client file.
+- `spec`: It outputs the server specification.
+- `authorization` Our authorization handler.
+
+#### Primus.before(name, fn, options)
+
+The `primus.before` method is how you add middleware layers to your system. All
+middleware layers need to be named. This allows you to also enable, disable and
+remove middleware layers. The supplied function can either a pre-configured
+function that is ready to answer request/responses or an unconfigured
+middleware. An unconfigured middleware is function with less then 2 arguments.
+We execute this function automatically with `Primus` as context of the function
+and optionally, the options that got provided:
+
+```js
+primus.before('name', function () {
+  var primus = this;
+
+  return function (req, res) {
+    res.end('foo');
+  }
+}, { foo: 'bar' });
+```
+
+As you can see in the example above, we assume that you return the actual
+middleware layer. If you don't need any pre-configuration you can just supply
+the function directly:
+
+```js
+// sync middleware
+primus.before('name', function (req, res) {
+
+});
+
+// async middleware
+primus.before('name', function (req, res, next) {
+  doStuff();
+});
+```
+
+You need to be aware that these middleware layers are running for HTTP requests
+but also upgrade requests. So it could be that certain middleware layers should
+only run for HTTP or Upgrade requests. In order to figure that out you can add a
+`http` or `upgrade` property to the middleware function and set it to `false` if
+you don't want it to be triggered.
+
+```js
+primus.before('name', function () {
+  function middleware(req, res, next) {
+  
+  }
+
+  middleware.upgrade = false; // Don't run this middleware for upgrades
+
+  return middleware;
+});
+```
+
+#### Primus.remove(name)
+
+This method allows you to remove middleware's that are configured. This works
+for the middleware layers that you added but also the middleware layers that we
+add by default. If you want to a different way of serving `primus.js` files you
+can simply:
+
+```js
+primus.remove('primus.js');
+```
+
+And add your own middleware instead.
+
+#### Primus.disable(name)
+
+In addition to removing middleware layers, it's also possible to disable them so
+they are skipped when we iterate over the middleware layers. This might be
+useful to just disable certain middleware layers in production.
+
+```js
+primus.disable('name');
+```
+
+#### Primus.enable(name)
+
+Of course, when you can disable middleware there also needs to be way to enable
+them again. This is exactly what this method does. Re-enable a disabled
+middleware layer.
+
+```js
+primus.enable('name');
+```
 
 ### Plugins
 
@@ -1242,6 +1389,21 @@ see it be merged automatically.
 </dl>
 
 <dl>
+  <dt><a href="http://github.com/neoziro/primus-cluster">primus-cluster</a></dt>
+  <dd>
+    Scale Primus across multiple servers or with node cluster.
+  </dd>
+  <dd>
+    <a href="https://travis-ci.org/neoziro/primus-cluster">
+      <img src="https://travis-ci.org/neoziro/primus-cluster.png?branch=master" alt="Build Status" />
+    </a>
+    <a href="http://badge.fury.io/js/primus-cluster">
+      <img src="https://badge.fury.io/js/primus-cluster.png" alt="NPM version" />
+    </a>
+  </dd>
+</dl>
+
+<dl>
   <dt><a href="http://github.com/swissmanu/primus-responder">primus-responder</a></dt>
   <dd>
     Client and server plugin that adds a request/response cycle to Primus.
@@ -1330,6 +1492,18 @@ see it be merged automatically.
     </a>
     <a href="http://badge.fury.io/js/primus-express-session">
       <img src="https://badge.fury.io/js/primus-express-session.png" alt="NPM version" />
+    </a>
+  </dd>
+</dl>
+
+<dl>
+  <dt><a href="https://github.com/Shopetti/backbone.primus/">backbone.primus</a></dt>
+  <dd>
+    Bind primus.io events to backbone models and collections.
+  </dd>
+  <dd>
+    <a href="https://travis-ci.org/Shopetti/backbone.primus">
+      <img src="https://travis-ci.org/Shopetti/backbone.primus.png?branch=master" alt="Build Status" />
     </a>
   </dd>
 </dl>
@@ -1500,6 +1674,28 @@ version when:
 3. A framework did an incompatible update.
 4. A new framework is added.
 5. People ask for it.
+
+### Other languages
+
+These projects are maintained by our valuable community and allow you to use
+primus in a different language than JavaScript:
+
+<dl>
+  <dt><a href="https://github.com/seegno/primus-objc">primus-objc</a></dt>
+  <dd>
+    <a href="https://travis-ci.org/seegno/primus-objc">
+      <img src="https://travis-ci.org/seegno/primus-objc.png" alt="Build Status" />
+    </a>
+  </dd>
+  <dd>
+    A client written in Objective-C for the Primus real-time framework with
+    initial support for web sockets (via SocketRocket) and socket.io (via
+    socket.IO-objc). Easily switch between different real-time Objective-C
+    frameworks without any code changes.
+  </dd>
+</dl>
+
+Want to have your project listed here? Add it using a pull-request!
 
 ### License
 
