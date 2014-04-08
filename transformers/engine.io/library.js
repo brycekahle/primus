@@ -708,6 +708,13 @@ function Transport (opts) {
 Emitter(Transport.prototype);
 
 /**
+ * A counter used to prevent collisions in the timestamps used
+ * for cache busting.
+ */
+
+Transport.timestamps = 0;
+
+/**
  * Emits an error.
  *
  * @param {String} str
@@ -1123,7 +1130,7 @@ function polling (opts) {
   opts.xdomain = xd;
   xhr = new XMLHttpRequest(opts);
 
-  if (xhr && !opts.forceJSONP) {
+  if ('open' in xhr && !opts.forceJSONP) {
     return new XHR(opts);
   } else {
     return new JSONP(opts);
@@ -1657,16 +1664,15 @@ Request.prototype.abort = function(){
 if (hasAttachEvent) {
   Request.requestsCount = 0;
   Request.requests = {};
+  global.attachEvent('onunload', unloadHandler);
+}
 
-  function unloadHandler() {
-    for (var i in Request.requests) {
-      if (Request.requests.hasOwnProperty(i)) {
-        Request.requests[i].abort();
-      }
+function unloadHandler() {
+  for (var i in Request.requests) {
+    if (Request.requests.hasOwnProperty(i)) {
+      Request.requests[i].abort();
     }
   }
-
-  global.attachEvent('onunload', unloadHandler);
 }
 
 }).call(this,typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
@@ -1899,7 +1905,7 @@ Polling.prototype.uri = function(){
     || util.ua.ios6
     || this.timestampRequests) {
     if (false !== this.timestampRequests) {
-      query[this.timestampParam] = +new Date;
+      query[this.timestampParam] = +new Date + '-' + Transport.timestamps++;
     }
   }
 
@@ -2002,7 +2008,7 @@ WS.prototype.doOpen = function(){
 
   this.ws = new WebSocket(uri, protocols, opts);
 
-  if (this.ws.binaryType !== undefined) {
+  if (this.ws.binaryType === undefined) {
     this.supportsBinary = false;
   }
 
@@ -2646,6 +2652,15 @@ var base64encoder = require('base64-arraybuffer');
 var after = require('after');
 
 /**
+ * Check if we are running an android browser. That requires us to use
+ * ArrayBuffer with polling transports...
+ *
+ * http://ghinda.net/jpeg-blob-ajax-android/
+ */
+
+var isAndroid = navigator.userAgent.match(/Android/i);
+
+/**
  * Current protocol version.
  */
 
@@ -2707,7 +2722,7 @@ exports.encodePacket = function (packet, supportsBinary, callback) {
 
   if (global.ArrayBuffer && data instanceof ArrayBuffer) {
     return encodeArrayBuffer(packet, supportsBinary, callback);
-  } else if (Blob && data instanceof Blob) {
+  } else if (Blob && data instanceof global.Blob) {
     return encodeBlob(packet, supportsBinary, callback);
   }
 
@@ -2760,6 +2775,10 @@ function encodeBlobAsArrayBuffer(packet, supportsBinary, callback) {
 function encodeBlob(packet, supportsBinary, callback) {
   if (!supportsBinary) {
     return exports.encodeBase64Packet(packet, callback);
+  }
+
+  if (isAndroid) {
+    return encodeBlobAsArrayBuffer(packet, supportsBinary, callback);
   }
 
   var length = new Uint8Array(1);
@@ -2884,9 +2903,10 @@ exports.encodePayload = function (packets, supportsBinary, callback) {
   }
 
   if (supportsBinary) {
-    if (Blob) {
+    if (Blob && !isAndroid) {
       return exports.encodePayloadAsBlob(packets, callback);
     }
+
     return exports.encodePayloadAsArrayBuffer(packets, callback);
   }
 

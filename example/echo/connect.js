@@ -11,14 +11,15 @@
 // --url <value>          (the server we want to connect to)
 //
 var argh = require('argh').argv
-  , Primus = require('../')
+  , Primus = require('../../')
   , Socket;
 
 //
 // Create a socket that's compatible with the given parser and transformer.
 //
 Socket = Primus.createSocket({
-  transformer: argh.transformer,
+  transformer: argh.transformer || 'engine.io',
+  pathname: argh.pathname || '/primusexample',
   parser: argh.parser
 });
 

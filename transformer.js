@@ -1,13 +1,8 @@
 'use strict';
 
-var querystring = require('querystring').parse
+var middlewareError = require('./middleware/error')
   , url = require('url').parse
   , fuse = require('fusing');
-
-//
-// Used to fake middleware's as we don't have a next callback.
-//
-function noop() {}
 
 /**
  * Transformer skeletons
@@ -130,7 +125,7 @@ Transformer.readable('forEach', function forEach(type, req, res, next) {
     }
 
     layer.fn.call(primus, req, res, function done(err) {
-      if (err) return next(err);
+      if (err) return middlewareError(err, req, res);
 
       iterate(index);
     });

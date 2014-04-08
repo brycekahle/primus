@@ -268,13 +268,14 @@ utils.userSetCode = function (code) {
 // See: http://www.erg.abdn.ac.uk/~gerrit/dccp/notes/ccid2/rto_estimator/
 // and RFC 2988.
 utils.countRTO = function (rtt) {
-    var rto;
-    if (rtt > 100) {
-        rto = 3 * rtt; // rto > 300msec
-    } else {
-        rto = rtt + 200; // 200msec < rto <= 300msec
-    }
-    return rto;
+    // In a local environment, when using IE8/9 and the `jsonp-polling`
+    // transport the time needed to establish a connection (the time that pass
+    // from the opening of the transport to the call of `_dispatchOpen`) is
+    // around 200ms (the lower bound used in the official client) and this
+    // causes spurious timeouts. For this reason we calculate a value slightly
+    // larger than that used in official client.
+    if (rtt > 100) return 4 * rtt; // rto > 400ms
+    return 300 + rtt;              // 300ms < rto <= 400ms
 }
 
 utils.log = function() {
@@ -946,7 +947,7 @@ var SockJS = function(url, dep_protocols_whitelist, options) {
         // makes `new` optional
         return new SockJS(url, dep_protocols_whitelist, options);
     }
-    
+
     var that = this, protocols_whitelist;
     that._options = {devel: false, debug: false, protocols_whitelist: [],
                      info: undefined, rtt: undefined};
@@ -1223,6 +1224,9 @@ var WebSocketTransport = SockJS.websocket = function(ri, trans_url) {
     that.ws.onmessage = function(e) {
         that.ri._didMessage(e.data);
     };
+    that.ws.onerror = function() {
+      ri._didMessage(utils.closeFrame(1006, "WebSocket connection broken"));
+    };
     // Firefox has an interesting bug. If a websocket connection is
     // created after onunload, it stays alive even when user
     // navigates away from the page. In such situation let's lie -
@@ -1243,7 +1247,7 @@ WebSocketTransport.prototype.doCleanup = function() {
     var that = this;
     var ws = that.ws;
     if (ws) {
-        ws.onmessage = ws.onclose = null;
+        ws.onmessage = ws.onclose = ws.onerror = null;
         ws.close();
         utils.unload_del(that.unload_ref);
         that.unload_ref = that.ri = that.ws = null;
