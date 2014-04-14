@@ -41,24 +41,26 @@ EventEmitter.prototype.emit = function emit(event, a1, a2, a3, a4, a5) {
     , i;
 
   if (1 === length) {
+    if (fn.__EE3_once) this.removeListener(event, fn);
+
     switch (len) {
       case 1:
-        fn.call(fn.context || this);
+        fn.call(fn.__EE3_context || this);
       break;
       case 2:
-        fn.call(fn.context || this, a1);
+        fn.call(fn.__EE3_context || this, a1);
       break;
       case 3:
-        fn.call(fn.context || this, a1, a2);
+        fn.call(fn.__EE3_context || this, a1, a2);
       break;
       case 4:
-        fn.call(fn.context || this, a1, a2, a3);
+        fn.call(fn.__EE3_context || this, a1, a2, a3);
       break;
       case 5:
-        fn.call(fn.context || this, a1, a2, a3, a4);
+        fn.call(fn.__EE3_context || this, a1, a2, a3, a4);
       break;
       case 6:
-        fn.call(fn.context || this, a1, a2, a3, a4, a5);
+        fn.call(fn.__EE3_context || this, a1, a2, a3, a4, a5);
       break;
 
       default:
@@ -66,18 +68,16 @@ EventEmitter.prototype.emit = function emit(event, a1, a2, a3, a4, a5) {
           args[i - 1] = arguments[i];
         }
 
-        fn.apply(fn.context || this, args);
+        fn.apply(fn.__EE3_context || this, args);
     }
-
-    if (fn.once) this.removeListener(event, fn);
   } else {
     for (i = 1, args = new Array(len -1); i < len; i++) {
       args[i - 1] = arguments[i];
     }
 
     for (i = 0; i < length; fn = listeners[++i]) {
-      fn.apply(fn.context || this, args);
-      if (fn.once) this.removeListener(event, fn);
+      if (fn.__EE3_once) this.removeListener(event, fn);
+      fn.apply(fn.__EE3_context || this, args);
     }
   }
 
@@ -96,7 +96,7 @@ EventEmitter.prototype.on = function on(event, fn, context) {
   if (!this._events) this._events = {};
   if (!this._events[event]) this._events[event] = [];
 
-  fn.context = context;
+  fn.__EE3_context = context;
   this._events[event].push(fn);
 
   return this;
@@ -111,7 +111,7 @@ EventEmitter.prototype.on = function on(event, fn, context) {
  * @api public
  */
 EventEmitter.prototype.once = function once(event, fn, context) {
-  fn.once = true;
+  fn.__EE3_once = true;
   return this.on(event, fn, context);
 };
 
@@ -129,7 +129,7 @@ EventEmitter.prototype.removeListener = function removeListener(event, fn) {
     , events = [];
 
   for (var i = 0, length = listeners.length; i < length; i++) {
-    if (fn && listeners[i] !== fn && listeners[i].fn !== fn) {
+    if (fn && listeners[i] !== fn) {
       events.push(listeners[i]);
     }
   }
@@ -584,6 +584,8 @@ Primus.prototype.initialise = function initialise(options) {
       primus.emit('readyStateChange');
     }
 
+    primus.latency = +new Date() - start;
+
     primus.emit('open');
     primus.clearTimeout('ping', 'pong').heartbeat();
 
@@ -594,8 +596,6 @@ Primus.prototype.initialise = function initialise(options) {
 
       primus.buffer = [];
     }
-
-    primus.latency = +new Date() - start;
   });
 
   primus.on('incoming::pong', function pong(time) {
@@ -1190,30 +1190,45 @@ Primus.prototype.querystring = function querystring(query) {
 };
 
 /**
+ * Transform a query string object back in to string equiv.
+ *
+ * @param {Object} obj The query string object.
+ * @returns {String}
+ * @api private
+ */
+Primus.prototype.querystringify = function querystringify(obj) {
+  var pairs = [];
+
+  for (var key in obj) {
+    if (obj.hasOwnProperty(key)) {
+      pairs.push(key +'='+ obj[key]);
+    }
+  }
+
+  return pairs.join('&');
+};
+
+/**
  * Generates a connection URI.
  *
  * @param {String} protocol The protocol that should used to crate the URI.
- * @param {Boolean} querystring Do we need to include a query string.
  * @returns {String|options} The URL.
  * @api private
  */
-Primus.prototype.uri = function uri(options, querystring) {
+Primus.prototype.uri = function uri(options) {
   var url = this.url
-    , server = [];
+    , server = []
+    , qsa = false;
 
   //
-  // Backwards compatible with Primus 1.4.0
-  // @TODO Remove me for Primus 2.0
+  // Query strings are only allowed when we've received clearance for it.
   //
-  if ('string' === typeof options) {
-    options = { protocol: options };
-    if (querystring) options.query = querystring;
-  }
+  if (options.query) qsa = true;
 
   options = options || {};
   options.protocol = 'protocol' in options ? options.protocol : 'http';
   options.query = url.search && 'query' in options ? (url.search.charAt(0) === '?' ? url.search.slice(1) : url.search) : false;
-  options.secure = 'secure' in options ? options.secure : url.protocol === 'https:';
+  options.secure = 'secure' in options ? options.secure : (url.protocol === 'https:' || url.protocol === 'wss:');
   options.auth = 'auth' in options ? options.auth : url.auth;
   options.pathname = 'pathname' in options ? options.pathname : this.pathname.slice(1);
   options.port = 'port' in options ? options.port : url.port || (options.secure ? 443 : 80);
@@ -1225,13 +1240,30 @@ Primus.prototype.uri = function uri(options, querystring) {
   this.emit('outgoing::url', options);
 
   //
+  // `url.host` might be undefined (e.g. when using zombie) so we use the
+  // hostname and port defined above.
+  //
+  var host = (443 != options.port && 80 != options.port)
+    ? options.host +':'+ options.port
+    : options.host;
+
+  //
+  // We need to make sure that we create a unique connection URL every time to
+  // prevent bfcache back forward cache of becoming an issue. We're doing this
+  // by forcing an cache busting query string in to the URL.
+  //
+  var querystring = this.querystring(options.query || '');
+  querystring._primuscb = +new Date();
+  options.query = this.querystringify(querystring);
+
+  //
   // Automatically suffix the protocol so we can supply `ws` and `http` and it gets
   // transformed correctly.
   //
   server.push(options.secure ? options.protocol +'s:' : options.protocol +':', '');
 
-  if (options.auth) server.push(options.auth +'@'+ url.host);
-  else server.push(url.host);
+  if (options.auth) server.push(options.auth +'@'+ host);
+  else server.push(host);
 
   //
   // Pathnames are optional as some Transformers would just use the pathname
@@ -1243,7 +1275,8 @@ Primus.prototype.uri = function uri(options, querystring) {
   // Optionally add a search query, again, not supported by all Transformers.
   // SockJS is known to throw errors when a query string is included.
   //
-  if (options.query) server.push('?'+ options.query);
+  if (qsa) server.push('?'+ options.query);
+  else delete options.query;
 
   if (options.object) return options;
   return server.join('/');

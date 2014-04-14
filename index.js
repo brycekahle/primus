@@ -235,6 +235,7 @@ Primus.readable('initialise', function initialise(Transformer, options) {
   this.before('cors', require('./middleware/access-control'));
   this.before('primus.js', require('./middleware/primus'));
   this.before('spec', require('./middleware/spec'));
+  this.before('no-cache', require('./middleware/no-cache'));
   this.before('authorization', require('./middleware/authorization'));
 
   //
@@ -701,18 +702,22 @@ Primus.readable('destroy', function destroy(options, fn) {
   }
 
   options = options || {};
-  var primus = this
-    , clean = false;
+  var primus = this;
 
   /**
-   * Clean up connections that are left open.
+   * Clean up some stuff.
    *
    * @api private
    */
   function cleanup() {
-    if (clean) return;
-    clean = true;
+    //
+    // Optionally close the server.
+    //
+    if (options.close !== false && primus.server) primus.server.close();
 
+    //
+    // Optionally close connections that are left open.
+    //
     if (options.end !== false) {
       primus.forEach(function shutdown(spark) {
         spark.end();
@@ -724,30 +729,17 @@ Primus.readable('destroy', function destroy(options, fn) {
     // references from all the event emitters.
     //
     primus.emit('close', options);
-    primus.transformer.emit('close', options);
 
-    if (fn && options.close === false) fn();
-  }
+    if (primus.transformer) {
+      primus.transformer.emit('close', options);
+      primus.transformer.removeAllListeners();
+    }
 
-  /**
-   * Clean up the server after it has been closed.
-   *
-   * @api private
-   */
-  function closed() {
-    if (primus.transformer) primus.transformer.removeAllListeners();
     if (primus.server) primus.server.removeAllListeners();
     primus.removeAllListeners();
 
     //
-    // The server has closed, but we didn't run any cleanups. Run them now
-    // before we kill the `primus.connections` object which will render the
-    // clean up process useless as there wouldn't be anything to iterate over.
-    //
-    if (!clean) cleanup();
-
-    //
-    // Null some potentially heavy objects to free some more memory instantly
+    // Null some potentially heavy objects to free some more memory instantly.
     //
     primus.transformers.outgoing.length = primus.transformers.incoming.length = 0;
     primus.transformer = primus.encoder = primus.decoder = primus.server = null;
@@ -759,16 +751,10 @@ Primus.readable('destroy', function destroy(options, fn) {
     if (fn) fn();
   }
 
-  if (options.close !== false) {
-    if (primus.server) primus.server.close(closed);
-    else setTimeout(closed, 0);
-  }
-
-  if (+options.timeout) {
-    setTimeout(cleanup, +options.timeout);
-  } else {
-    cleanup();
-  }
+  //
+  // Force a `0` as timeout to maintain a full async callback.
+  //
+  setTimeout(cleanup, +options.timeout || 0);
 
   return this;
 });
@@ -822,6 +808,100 @@ Primus.createSocket = function createSocket(options) {
 
   var primus = new Primus(new EventEmitter(), options);
   return primus.Socket;
+};
+
+/**
+ * Create a new Primus server.
+ *
+ * @param {Function} fn Request listener.
+ * @param {Object} options Configuration.
+ * @returns {Pipe}
+ * @api public
+ */
+Primus.createServer = function createServer(fn, options) {
+  if ('object' === typeof fn) {
+    options = fn;
+    fn = null;
+  }
+
+  options = options || {};
+
+  var port = options.port || 443            // Force HTTPS as default server.
+    , certs = options.key && options.cert   // Check HTTPS certificates.
+    , secure = certs || 443 === port        // Check for a true HTTPS
+    , spdy = 'spdy' in options              // Maybe.. We're SPDY
+    , server;
+
+  var path = require('path')
+    , fs = require('fs');
+
+  //
+  // We need to have SSL certs for SPDY and secure servers.
+  //
+  if ((secure || spdy) && !certs) {
+    throw new Error('Missing the SSL key or certificate files in the options.');
+  }
+
+  //
+  // When given a `options.root` assume that our SSL certs and keys are path
+  // references that still needs to be read. This allows a much more human
+  // readable interface for SSL.
+  //
+  if (secure && options.root) {
+    ['cert', 'key', 'ca', 'pfx', 'crl'].filter(function filter(key) {
+      return key in options;
+    }).forEach(function parse(key) {
+      var data = options[key];
+
+      if (Array.isArray(data)) {
+        options[key] = data.map(function read(file) {
+          return fs.readFileSync(path.join(options.root, file));
+        });
+      } else {
+        options[key] = fs.readFileSync(path.join(options.root, data));
+      }
+    });
+  }
+
+  if (spdy) {
+    server = require('spdy').createServer(options);
+  } else if (secure) {
+    server = require('https').createServer(options);
+
+    if (+options.redirect) require('http').createServer(function handle(req, res) {
+      res.statusCode = 404;
+
+      if (req.headers.host) {
+        res.statusCode = 301;
+        res.setHeader('Location', 'https://'+ req.headers.host + req.url);
+      }
+
+      res.end('');
+    }).listen(+options.redirect);
+  } else {
+    server = require('http').createServer();
+    if (!options.iknowhttpsisbetter) [
+      '',
+      'We\'ve detected that you\'re using a HTTP instead of a HTTPS server. Please',
+      'beaware real-time connections have less chance of being blocked by firewalls',
+      'and anti-virus scanners if they are encrypted. If you run your server behind',
+      'a reverse and HTTPS terminating proxy ignore this message, if not, you\'ve',
+      'been warned.',
+      ''
+    ].forEach(function each(line) {
+      console.log('primus: '+ line);
+    });
+  }
+
+  //
+  // Now that we've got a server, we can setup the Primus and start listening.
+  //
+  var application = new Primus(server, options);
+
+  if (fn) application.on('connection', fn);
+  server.listen(port);
+
+  return application;
 };
 
 //

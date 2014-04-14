@@ -94,8 +94,9 @@ Transformer.readable('initialise', function initialise() {
  * @api private
  */
 Transformer.readable('forEach', function forEach(type, req, res, next) {
-  var layers = this.primus.layers
-    , primus = this.primus;
+  var transformer = this
+    , layers = transformer.primus.layers
+    , primus = transformer.primus;
 
   req.uri = req.uri || url(req.url, true);
   req.query = req.query || req.uri.query || {};
@@ -107,7 +108,7 @@ Transformer.readable('forEach', function forEach(type, req, res, next) {
 
   if (!layers.length) {
     next();
-    return this;
+    return transformer;
   }
 
   //
@@ -120,7 +121,18 @@ Transformer.readable('forEach', function forEach(type, req, res, next) {
     if (!layer.enabled || layer.fn[type] === false) return iterate(index);
 
     if (layer.length === 2) {
-      if (layer.fn.call(primus, req, res) === false) return;
+      var answered = layer.fn.call(primus, req, res);
+
+      //
+      // @TODO remove the warning and the unneeded code.
+      //
+      if (answered === false) {
+        answered = true;
+
+        if (!layer.warned) transformer.deprecate(layer);
+      }
+
+      if (answered) return;
       return iterate(index);
     }
 
@@ -131,7 +143,30 @@ Transformer.readable('forEach', function forEach(type, req, res, next) {
     });
   }(0));
 
-  return this;
+  return transformer;
+});
+
+/**
+ * Issue a deprecation warning.
+ *
+ * @param {String} data The object we're trying to deprecate.
+ * @api private
+ */
+Transformer.readable('deprecate', function deprecate(data) {
+  var name = data.name;
+
+  [
+    '',
+    'We\'ve detected that your middleware layer ('+ name +') is returning `false`',
+    'which will be deprecated in future releases. If this middleware has already',
+    'answered the request it should return `true`.',
+    ''
+  ].forEach(function each(line) {
+    console.error('primus: '+ line);
+  });
+
+  data.warned = true;
+  return data;
 });
 
 /**

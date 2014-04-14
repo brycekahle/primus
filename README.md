@@ -118,7 +118,6 @@ var Primus = require('primus')
 var server = http.createServer(/* request handler */)
   , primus = new Primus(server, {/* options */});
 ```
-
 The following options can be provided:
 
 Name                | Description                               | Default       
@@ -156,7 +155,50 @@ you can supply a `parser` configuration option:
 var primus = new Primus(server, { parser: 'JSON' });
 ```
 
-All parsers have an `async` interface for error handling.
+All parsers have an `async` interface for error handling. If you don't have a
+pre-existing server where you want or can attach your Primus server to you can
+also use the `Primus.createServer` convenience method. The `createServer method
+will automatically:
+
+- Setup a HTTP, HTTPS or SPDY server for you on the given port number.
+- Setup your Primus server with the given configuration.
+- Listen on the HTTP, HTTPS, SPDY server.
+- Attach a `primus.on('connection')` listener.
+- Return the created Primus instance.
+
+```js
+Primus.createServer(function connection(spark) {
+
+}, { port: 8080, transformer: 'websockets' });
+```
+
+In the above example we automatically create a HTTP server which will listen
+on port 8080, a primus instance with the `websockets` transformer and start
+listening for incoming connections. The supplied function in the
+`Primus.createServer` method is optional. You can just listen for incoming
+connectios your self using the returned Primus instance. If you want to listen to
+a HTTPS or SPDY server, which is recommended, you can directly pass the SPDY and
+HTTPS certs/keys/pfx files in the options object:
+
+```js
+var primus = Primus.createServer({
+  port: 443,
+  root: '/folder/with/https/cert/files',
+  cert: 'myfilename.cert',
+  key: 'myfilename.cert',
+  ca: 'myfilename.ca',
+  pfx: 'filename.pfx',
+  passphrase: 'my super sweet password'
+});
+
+primus.on('connection', function (spark) {
+  spark.write('hello connnection');
+});
+```
+
+`Primus.createServer` returns a warning when it starts a HTTP server. The
+warning advises you to use a HTTPS server and can be disabled setting the
+option `iknowhttpsisbetter` to `true`.
 
 #### Client library
 
@@ -406,7 +448,7 @@ ping                | Ping interval to test connection        | `25000` ms
 pong                | Time the server has to respond to ping  | `10000` ms
 [strategy]          | Our reconnect strategies                | `"disconnect,online,timeout"`
 manual              | Manually open the connection            | `false`
-websockets          | Should we AVOID the usage of WebSockets | Boolean, is detected
+websockets          | Should we use WebSockets                | Boolean, is detected
 network             | Use native `online`/`offline` detection | Boolean, is feature detected
 transport           | Transport specific configuration        | `{}`
 queueSize           | Number of messages that can be queued   | `Infinity`
