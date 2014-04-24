@@ -1168,7 +1168,7 @@ SockJS.prototype._try_next_protocol = function(close_event) {
 
             var connid = utils.random_string(8);
             var trans_url = that._base_url + '/' + that._server + '/' + connid;
-            trans_url = utils.trans_specific_url(trans_url, protocol);
+            if (that._options.ws_https_only) trans_url = utils.trans_specific_url(trans_url, protocol);
             that._debug('Opening transport:', protocol, ' url:'+trans_url,
                         ' RTO:'+that._options.rto);
             that._transport = new SockJS[protocol](that, trans_url,
